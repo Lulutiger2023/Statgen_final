@@ -1,0 +1,297 @@
+---
+title: "Limma_voom CMP vs CFUE"
+output: html_document
+date: "2025-04-01"
+author: "Ishika Verma"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(limma)
+library(Glimma)
+library(edgeR)
+library(Mus.musculus)
+library(org.Mm.eg.db)
+library(EnhancedVolcano)
+```
+
+## Reading the files for all the data
+
+```{r}
+#CMP files
+cmp_1 <- read.table("data/2_CMP/rna/ENCFF623OLU.tsv", header = TRUE, sep = "\t")
+cmp_2 <- read.table("data/2_CMP/rna/ENCFF691MHW.tsv", header = TRUE, sep = "\t")
+
+#CFUE files
+cfue_1 <- read.table("data/3_CFUE/rna/ENCFF655LMK.tsv", header = TRUE, sep = "\t") 
+cfue_2 <- read.table("data/3_CFUE/rna/ENCFF667IDY.tsv", header = TRUE, sep = "\t")  
+
+```
+
+
+#Pair 1- CMP & CFUE
+```{r}
+files_cmp_cfue <- c("data/2_CMP/rna/ENCFF623OLU.tsv", "data/2_CMP/rna/ENCFF691MHW.tsv", "data/3_CFUE/rna/ENCFF655LMK.tsv", "data/3_CFUE/rna/ENCFF667IDY.tsv")
+x_cmp_cfue <- readDGE(files_cmp_cfue, columns=c(1, 5))
+dim(x_cmp_cfue)
+#colnames(x_cmp_cfue) <- c("CMP_1", "CMP_2", "CFUE_1", "CFUE_2")
+```
+## Organising sample information
+```{r}
+samplenames_cmp_cfue <- c("CMP_1", "CMP_2", "CFUE_1", "CFUE_2")
+samplenames_cmp_cfue
+
+colnames(x_cmp_cfue) <- samplenames_cmp_cfue
+
+group <- as.factor(c("CMP", "CMP", "CFUE", "CFUE"))
+x_cmp_cfue$samples$group <- group
+
+x_cmp_cfue$samples
+
+```
+## Organising gene annotations
+```{r}
+geneid <- rownames(x_cmp_cfue)
+geneid_clean <- sub("\\.\\d+$", "", geneid)
+genes <- select(org.Mm.eg.db, keys=geneid_clean, columns=c("SYMBOL", "ENSEMBL", "GENENAME", "ENTREZID", "PMID"),
+                keytype="ENSEMBL")
+
+genes <- genes[!duplicated(genes$ENSEMBL),]
+x_cmp_cfue$genes <- genes
+```
+
+## Data pre-processing
+
+### Transformations from the raw-scale
+```{r}
+cpm <- cpm(x_cmp_cfue)
+lcpm <- cpm(x_cmp_cfue, log=TRUE)
+L <- mean(x_cmp_cfue$samples$lib.size) * 1e-6
+M <- median(x_cmp_cfue$samples$lib.size) * 1e-6
+c(L, M)
+summary(lcpm)
+```
+### Removing genes that are lowly expressed
+```{r}
+table(rowSums(x_cmp_cfue$counts==0)==4)
+keep.exprs <- filterByExpr(x_cmp_cfue, group=group)
+x_cmp_cfue <- x_cmp_cfue[keep.exprs,, keep.lib.sizes=FALSE]
+dim(x_cmp_cfue)
+```
+```{r}
+lcpm.cutoff <- log2(10/M + 2/L)
+library(RColorBrewer)
+nsamples <- ncol(x_cmp_cfue)
+
+col <- brewer.pal(nsamples, "Paired")
+
+par(mfrow=c(1,2))
+plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,0.26), las=2, main="", xlab="")
+title(main="A. Raw data", xlab="Log-cpm")
+abline(v=lcpm.cutoff, lty=3)
+
+for (i in 2:nsamples){
+den <- density(lcpm[,i])
+lines(den$x, den$y, col=col[i], lwd=2)
+}
+legend("topright", samplenames_cmp_cfue, text.col=col, bty="n")
+
+lcpm <- cpm(x_cmp_cfue, log=TRUE)
+plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,0.26), las=2, main="", xlab="")
+title(main="B. Filtered data", xlab="Log-cpm")
+abline(v=lcpm.cutoff, lty=3)
+
+for (i in 2:nsamples){
+den <- density(lcpm[,i])
+lines(den$x, den$y, col=col[i], lwd=2)
+}
+legend("topright", samplenames_cmp_cfue, text.col=col, bty="n")
+```
+### Normalising gene expression distributions
+```{r}
+x_cmp_cfue <- calcNormFactors(x_cmp_cfue, method = "TMM")
+x_cmp_cfue$samples$norm.factors
+```
+
+```{r}
+#To give a better visual representation of the effects of normalisation
+x2 <- x_cmp_cfue
+x2$samples$norm.factors <- 1
+x2$counts[,1] <- ceiling(x2$counts[,1]*0.05)
+x2$counts[,2] <- x2$counts[,2]*5
+
+par(mfrow=c(1,2))
+lcpm <- cpm(x2, log=TRUE)
+boxplot(lcpm, las=2, col=col, main="")
+title(main="A. Example: Unnormalised data",ylab="Log-cpm")
+x2 <- calcNormFactors(x2)  
+x2$samples$norm.factors
+
+lcpm <- cpm(x2, log=TRUE)
+boxplot(lcpm, las=2, col=col, main="")
+title(main="B. Example: Normalised data",ylab="Log-cpm")
+```
+## Differential expression analysis
+
+### Creating a design matrix and contrasts
+```{r}
+design <- model.matrix(~0+group)
+colnames(design) <- gsub("group", "", colnames(design))
+design
+```
+
+```{r}
+contr.matrix <- makeContrasts(
+   CMPvsCFUE = CMP-CFUE, 
+   levels = colnames(design))
+contr.matrix
+```
+### Removing heteroscedascity from count data
+```{r}
+v <- voom(x_cmp_cfue, design, plot=TRUE)
+v
+```
+```{r}
+vfit <- lmFit(v, design)
+vfit <- contrasts.fit(vfit, contrasts=contr.matrix)
+efit <- eBayes(vfit)
+save(efit, file = "efit.RData") 
+plotSA(efit, main="Final model CMP vs CFUE: Mean-variance trend")
+
+```
+#FInding the number of differentially expressed genes
+```{r}
+summary(decideTests(efit)) #This is with p value less than 0.05 and no log2FoldChange
+```
+```{r}
+tfit <- treat(vfit, lfc=1)
+dt <- decideTests(tfit)
+up_idx <- dt[, "CMPvsCFUE"] == 1
+up_idx
+up_genes_limma <- rownames(x_cmp_cfue)[up_idx]
+write.table(up_genes_limma, file = "up_genes_limma_lfc1.txt",
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+
+down_idx <- dt[, "CMPvsCFUE"] == -1
+down_genes_limma <- rownames(x_cmp_cfue)[down_idx]
+write.table(down_genes_limma, file = "down_genes_limma_lfc1.txt",
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+
+summary(dt)
+
+```
+### Examining individual DE genes from top to bottom
+```{r}
+cmp.vs.cfue <- topTreat(tfit, coef=1, n=Inf)
+head(cmp.vs.cfue)
+```
+#### MD Plots
+```{r}
+plotMD(tfit, column=1, status=dt[,1], main=colnames(tfit)[1], 
+       xlim=c(-8,13))
+```
+```{r}
+
+glMDPlot(tfit, coef=1, status=dt, main=colnames(tfit)[1],
+         side.main="ENSEMBL", counts=lcpm, groups=group, launch=FALSE)
+```
+
+```{r}
+library(gplots)
+cmp.vs.cfue.topgenes <- cmp.vs.cfue$ENSEMBL[1:100]
+i <- which(v$genes$ENSEMBL %in% cmp.vs.cfue.topgenes)
+mycol <- colorpanel(1000,"blue","white","green")
+heatmap.2(lcpm[i,], scale="row",
+   labRow=v$genes$SYMBOL[i], labCol=group, 
+   col=mycol, trace="none", density.info="none", 
+   margin=c(8,6), lhei=c(2,10), dendrogram="column")
+```
+```{r}
+#Apply treat with log2FC threshold of 4 to get gene list for GO enrichment analysis
+tfit <- treat(vfit, lfc=4)
+dt <- decideTests(tfit)
+
+cmp.vs.cfue_4 <- topTreat(tfit, coef=1, n=Inf)
+
+# 3. Filter for significant genes with logFC >= 4 or <= -4
+top_genes_logfc_4_limma <- subset(cmp.vs.cfue_4, adj.P.Val < 0.05 & abs(logFC) >= 4)
+
+# 4. Extract and clean ENSEMBL IDs
+ensembl_ids_limma <- rownames(top_genes_logfc_4_limma)
+ensembl_ids_limma_clean <- sub("\\..*", "", ensembl_ids_limma)
+
+# 5. Save the clean ENSEMBL IDs to a file
+write.table(ensembl_ids_limma_clean,
+            file = "top_genes_logfc4_cmp_vs_cfue_limma_ensembl_ids.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+
+tfit <- treat(vfit, lfc=1)
+dt <- decideTests(tfit)
+
+cmp.vs.cfue_1 <- topTreat(tfit, coef=1, n=Inf)
+
+# 3. Filter for significant genes with logFC >= 4 or <= -4
+top_genes_logfc_1_limma <- subset(cmp.vs.cfue_1, adj.P.Val < 0.05 & abs(logFC) >= 1)
+
+# 4. Extract and clean ENSEMBL IDs
+ensembl_ids_limma <- rownames(top_genes_logfc_1_limma)
+ensembl_ids_limma_clean <- sub("\\..*", "", ensembl_ids_limma)
+
+# 5. Save the clean ENSEMBL IDs to a file
+write.table(ensembl_ids_limma_clean,
+            file = "top_genes_logfc1_cmp_vs_cfue_limma_ensembl_ids.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+
+##Saving up and downregulated genes separately
+
+up_genes_limma <- subset(top_genes_logfc_1_limma, logFC >= 1)
+down_genes_limma <- subset(top_genes_logfc_1_limma, logFC <= -1)
+
+up_ensembl_ids <- sub("\\..*", "", rownames(up_genes_limma))
+down_ensembl_ids <- sub("\\..*", "", rownames(down_genes_limma))
+
+write.table(up_ensembl_ids,
+            file = "up_genes_logfc1_cmp_vs_cfue_limma_ensembl_ids.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+
+write.table(down_ensembl_ids,
+            file = "down_genes_logfc1_cmp_vs_cfue_limma_ensembl_ids.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+```
+
+#### Volcano Plot
+```{r}
+png("CMP_vs_CFUE_volcano_limma.png", width = 2000, height = 1600, res = 300)
+EnhancedVolcano(cmp.vs.cfue,
+    lab = cmp.vs.cfue$SYMBOL,
+    x = 'logFC',
+    y = 'adj.P.Val',
+    xlim = c(-5, 5),
+    pCutoff = 0.05,
+    FCcutoff = 2,
+    title = 'Volcano plot: CMP vs CFUE',
+    subtitle = 'Limma Voom',
+    caption = 'Thresholds: adj.P.Val < 0.05, |log2FC| > 1',
+    pointSize = 2.0,
+    labSize = 3.0,
+    colAlpha = 0.8,
+    legendPosition = 'right',
+    legendLabSize = 12,
+    legendIconSize = 4.0,
+    ylab = "-Log10(padj)",
+  legendLabels = c("NS", "Log2 FC", "padj", "padj and log2 FC"))
+
+dev.off()
+```

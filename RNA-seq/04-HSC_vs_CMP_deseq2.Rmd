@@ -1,0 +1,218 @@
+---
+title: "RNA seq analysis of HSC vs CMP"
+output: html_document
+date: "2025-04-20"
+author: "Ishika Verma"
+---
+# Importing the required libraries
+```{r}
+library("DESeq2")
+library("apeglm")
+library("pheatmap")
+library("RColorBrewer")
+library("pheatmap")
+library("vsn")
+library(org.Mm.eg.db)
+library(ggplot2)
+library(EnhancedVolcano)
+library(ggVennDiagram)
+library(grid)
+library(devtools)
+library(enrichR)
+```
+
+# Pair 2 - HSC & CMP
+
+## Reading the files for all the data
+
+```{r}
+#HSC files
+hsc_1 <- read.table("data/1_HSC/rna/ENCFF064MKY.tsv", header = TRUE, sep = "\t")
+hsc_2 <- read.table("data/1_HSC/rna/ENCFF247FEJ.tsv", header = TRUE, sep = "\t")
+hsc_1_counts <- hsc_1$expected_count
+hsc_2_counts <- hsc_2$expected_count
+
+#CMP files
+cmp_1 <- read.table("data/2_CMP/rna/ENCFF623OLU.tsv", header = TRUE, sep = "\t")
+cmp_2 <- read.table("data/2_CMP/rna/ENCFF691MHW.tsv", header = TRUE, sep = "\t")
+cmp_1_counts <- cmp_1$expected_count
+cmp_2_counts <- cmp_2$expected_count
+
+
+
+```
+
+# Check whether the gene ids are identical before making a count matrix with them
+```{r}
+identical(hsc_1$gene_id, hsc_2$gene_id)
+identical(cmp_1$gene_id, cmp_2$gene_id)
+identical(hsc_1$gene_id, cmp_1$gene_id)
+identical(hsc_2$gene_id, cmp_2$gene_id)
+```
+Since all the outputs are true, it means that the gene_ids are same in all the samples of hsc and cmp.
+
+#Making the DESeqDataset (dds)
+```{r}
+#countData
+hsc_cmp_count_data <- data.frame(
+  hsc_1 = hsc_1_counts,
+  hsc_2 = hsc_2_counts,
+  cmp_1 = cmp_1_counts,
+  cmp_2 = cmp_2_counts,
+  row.names = hsc_1$gene_id
+)
+
+#colData
+samples <- c("hsc_1", "hsc_2", "cmp_1", "cmp_2")
+broad_category_samples <-rep(c("hsc","cmp"),each=2)
+hsc_cmp_coldata <- data.frame(row.names = samples, cell_stage = broad_category_samples)
+
+#dds
+dds_hsc_cmp <- DESeqDataSetFromMatrix(countData = round(hsc_cmp_count_data),
+                             colData = hsc_cmp_coldata,
+                             design = ~ cell_stage )
+```
+```{r}
+#Saving the count matrix in a csv file
+write.csv(hsc_cmp_count_data, file = "12_hsc_cmp_count_data.csv", quote = FALSE)
+```
+
+#Find the smallest group size and performing pre-filtering
+This step ensures that the genes with low read count are removed from the data prior to differential expression analysis.
+```{r}
+table(dds_hsc_cmp$cell_stage)
+smallestGroupSize <- 2
+keep <- rowSums(counts(dds_hsc_cmp) >= 10) >= smallestGroupSize
+dds_hsc_cmp <- dds_hsc_cmp[keep,]
+```
+
+
+## Performing differential gene expression analysis
+```{r}
+dds_hsc_cmp <- DESeq(dds_hsc_cmp)
+res_hsc_cmp <- results(dds_hsc_cmp)
+summary(res_hsc_cmp)
+
+```
+## Log fold change shrinkage
+```{r}
+resultsNames(dds_hsc_cmp)
+resLFC_hsc_cmp <- lfcShrink(dds_hsc_cmp, coef="cell_stage_hsc_vs_cmp", type="apeglm")
+resLFC_hsc_cmp
+```
+
+## Ordering the top genes by p-values
+```{r}
+resOrdered <- resLFC_hsc_cmp[order(resLFC_hsc_cmp$pvalue),]
+```
+
+## Checking the number of the significant genes (with adjusted p-values less than 0.05)
+```{r}
+sum(resLFC_hsc_cmp$padj < 0.05, na.rm=TRUE)
+```
+
+#Mapping ENSEMBL Ids to gene symbols
+```{r}
+clean_ids <- sub("\\..*", "", rownames(resLFC_hsc_cmp))
+clean_ids_dds <- sub("\\..*", "", rownames(res_hsc_cmp))
+
+gene_symbols <- mapIds(org.Mm.eg.db,
+                       keys = clean_ids,
+                       column = c('SYMBOL'),
+                      keytype = "ENSEMBL")
+gene_symbols_dds <- mapIds(org.Mm.eg.db,
+                       keys = clean_ids_dds,
+                       column = c('SYMBOL'),
+                       keytype = "ENSEMBL")
+
+
+
+gene_symbols <- gene_symbols[match(clean_ids, names(gene_symbols))]
+gene_symbols_dds <- gene_symbols_dds[match(clean_ids_dds, names(gene_symbols_dds))]
+
+resLFC_hsc_cmp$symbol <- gene_symbols
+res_hsc_cmp$symbol <- gene_symbols_dds
+```
+##MA Plot
+```{r}
+plotMA(resLFC_hsc_cmp, alpha = 0.05)
+title("MA Plot: HSC vs CMP")
+
+```
+## Volcano Plots
+```{r}
+png("HSC_vs_CMP_volcano_deseq2.png", width = 2000, height = 1600, res = 300)
+
+EnhancedVolcano(res_hsc_cmp,
+                lab = res_hsc_cmp$symbol, #not shrunken
+                x = 'log2FoldChange',
+                y = 'padj',
+                xlim = c(-5, 5),
+                pCutoff = 0.05,
+                FCcutoff = 2,
+                title = 'Volcano plot: HSC vs CMP',
+                subtitle = 'DESeq2',
+                caption = 'Thresholds: padj < 0.05, |log2FC| > 1',
+                pointSize = 2.0,
+                labSize = 3.0,
+                colAlpha = 0.8,
+                legendPosition = 'right',
+                legendLabSize = 12,
+                legendIconSize = 4.0,ylab = "-Log10(padj)",
+  legendLabels = c("NS", "Log2 FC", "padj", "padj and log2 FC"))
+dev.off()
+```
+
+# Saving upregulated and downregulated genes for functional enrichment analysis 
+```{r}
+top_genes_logfc_1 <- subset(res_hsc_cmp, padj < 0.05 & abs(log2FoldChange) >= 1)
+
+up_genes <- subset(top_genes_logfc_1, log2FoldChange >= 1)
+down_genes <- subset(top_genes_logfc_1, log2FoldChange <= -1)
+
+up_ensembl_ids <- sub("\\..*", "", rownames(up_genes))
+down_ensembl_ids <- sub("\\..*", "", rownames(down_genes))
+
+write.table(up_ensembl_ids,
+            file = "up_genes_logfc1_hsc_vs_cmp_deseq2_new_ensembl_ids.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+
+write.table(down_ensembl_ids,
+            file = "down_genes_logfc1_hsc_vs_cmp_deseq2_new_ensembl_ids.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+```
+
+## Clustering analysis
+### Transformation
+```{r}
+vsd_hsc_cmp <- vst(dds_hsc_cmp, blind=FALSE)
+```
+
+## Heatmap of count matrix
+```{r}
+select <- order(rowMeans(counts(dds_hsc_cmp,normalized=TRUE)),
+                decreasing=TRUE)[1:50]
+df <- as.data.frame(colData(dds_hsc_cmp)[, "cell_stage", drop = FALSE])
+pheatmap(assay(vsd_hsc_cmp)[select,], cluster_rows=FALSE, show_rownames=FALSE,cluster_cols = FALSE,
+          annotation_col=df,  main = "Top 50 Most Expressed Genes in HSC & CMP")
+
+```
+### Sample clustering
+### Calculate sample-to-sample distances
+```{r}
+sampleDists_hsc_cmp <- dist(t(assay(vsd_hsc_cmp)))
+
+sampleDistMatrix_hsc_cmp <- as.matrix(sampleDists_hsc_cmp)
+rownames(sampleDistMatrix_hsc_cmp) <- paste(vsd_hsc_cmp$cell_stage, vsd_hsc_cmp$type, sep="-")
+colnames(sampleDistMatrix_hsc_cmp) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix_hsc_cmp,
+         clustering_distance_rows=sampleDists_hsc_cmp,
+         clustering_distance_cols=sampleDists_hsc_cmp,
+         col=colors,
+          main = "Sample-to-Sample Distance Matrix (HSC vs CMP)")
+```

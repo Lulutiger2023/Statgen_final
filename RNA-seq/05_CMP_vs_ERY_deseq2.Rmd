@@ -1,0 +1,226 @@
+---
+title: "RNA seq analysis of CMP vs ERY"
+output: html_document
+date: "2025-04-20"
+author: "Ishika Verma"
+---
+# Importing the required libraries
+```{r}
+library("DESeq2")
+library("apeglm")
+library("pheatmap")
+library("RColorBrewer")
+library("pheatmap")
+library("vsn")
+library(org.Mm.eg.db)
+library(ggplot2)
+library(EnhancedVolcano)
+library(ggVennDiagram)
+library(grid)
+library(devtools)
+library(enrichR)
+```
+
+## Reading the files for all the data
+
+```{r}
+#CMP files
+cmp_1 <- read.table("data/2_CMP/rna/ENCFF623OLU.tsv", header = TRUE, sep = "\t")
+cmp_2 <- read.table("data/2_CMP/rna/ENCFF691MHW.tsv", header = TRUE, sep = "\t")
+cmp_1_counts <- cmp_1$expected_count
+cmp_2_counts <- cmp_2$expected_count
+
+#ERY files
+ery_1 <- read.table("data/4_ERY/rna/ENCFF342WUL.tsv", header = TRUE, sep = "\t") 
+ery_2 <- read.table("data/4_ERY/rna/ENCFF858JHF.tsv", header = TRUE, sep = "\t") 
+ery_1_counts <- ery_1$expected_count
+ery_2_counts <- ery_2$expected_count
+
+```
+
+# Pair 3 - CMP & ERY
+
+# Checking whether the gene ids are identical before making a count matrix with them
+
+```{r}
+identical(cmp_1$gene_id, cmp_2$gene_id)
+identical(ery_1$gene_id, ery_2$gene_id)
+identical(cmp_1$gene_id, ery_1$gene_id)
+identical(cmp_2$gene_id, ery_2$gene_id)
+```
+Since all the outputs are true, it means that the gene_ids are same in all the samples of cmp and ery.
+
+#Making the DESeqDataset (dds)
+```{r}
+#countData
+cmp_ery_count_data <- data.frame(
+  cmp_1 = cmp_1_counts,
+  cmp_2 = cmp_2_counts,
+  ery_1 = ery_1_counts,
+  ery_2 = ery_2_counts,
+  row.names = cmp_1$gene_id
+)
+
+#colData
+samples <- c("cmp_1", "cmp_2", "ery_1", "ery_2")
+broad_category_samples <-rep(c("cmp","ery"),each=2)
+cmp_ery_coldata <- data.frame(row.names = samples, cell_stage = broad_category_samples)
+
+#dds
+dds_cmp_ery <- DESeqDataSetFromMatrix(countData = round(cmp_ery_count_data),
+                             colData = cmp_ery_coldata,
+                             design = ~ cell_stage )
+```
+```{r}
+#Saving the count matrix in a csv file
+write.csv(cmp_ery_count_data, file = "24_cmp_ery_count_data.csv", quote = FALSE)
+```
+
+#Find the smallest group size and performing pre-filtering
+This step ensures that the genes with low read count are removed from the data prior to 
+```{r}
+table(dds_cmp_ery$cell_stage)
+smallestGroupSize <- 2
+keep <- rowSums(counts(dds_cmp_ery) >= 10) >= smallestGroupSize
+dds_cmp_ery <- dds_cmp_ery[keep,]
+```
+
+
+## Performing differential gene expression analysis
+```{r}
+dds_cmp_ery <- DESeq(dds_cmp_ery)
+res_cmp_ery <- results(dds_cmp_ery)
+summary(res_cmp_ery)
+```
+
+## Log fold change shrinkage
+```{r}
+resultsNames(dds_cmp_ery)
+resLFC_cmp_ery <- lfcShrink(dds_cmp_ery, coef="cell_stage_ery_vs_cmp", type="apeglm")
+resLFC_cmp_ery
+```
+
+## Ordering the top genes by p-values
+```{r}
+resOrdered <- resLFC_cmp_ery[order(resLFC_cmp_ery$pvalue),]
+levels(dds_cmp_ery$cell_stage)
+```
+
+## Checking the number of the significant genes (with adjusted p-values less than 0.05)
+```{r}
+sum(resLFC_cmp_ery$padj < 0.05, na.rm=TRUE)
+```
+
+#Mapping ENSEMBL Ids to gene symbols
+```{r}
+clean_ids <- sub("\\..*", "", rownames(resLFC_cmp_ery))
+clean_ids_dds <- sub("\\..*", "", rownames(res_cmp_ery))
+
+gene_symbols <- mapIds(org.Mm.eg.db,
+                       keys = clean_ids,
+                       column = c('SYMBOL'),
+                      keytype = "ENSEMBL")
+gene_symbols_dds <- mapIds(org.Mm.eg.db,
+                       keys = clean_ids_dds,
+                       column = c('SYMBOL'),
+                       keytype = "ENSEMBL")
+
+
+
+gene_symbols <- gene_symbols[match(clean_ids, names(gene_symbols))]
+gene_symbols_dds <- gene_symbols_dds[match(clean_ids_dds, names(gene_symbols_dds))]
+
+resLFC_cmp_ery$symbol <- gene_symbols
+res_cmp_ery$symbol <- gene_symbols_dds
+```
+## Volcano Plots
+```{r}
+png("CMP_vs_ERY_volcano_deseq2.png", width = 2000, height = 1600, res = 300)
+EnhancedVolcano(res_cmp_ery,
+                lab = res_cmp_ery$symbol, #not shrunken
+                x = 'log2FoldChange',
+                y = 'padj',
+                xlim = c(-5, 5),
+                pCutoff = 0.05,
+                FCcutoff = 2,
+                title = 'Volcano plot: CMP vs ERY',
+                subtitle = 'DESeq2',
+                caption = 'Thresholds: padj < 0.05, |log2FC| > 1',
+                pointSize = 2.0,
+                labSize = 3.0,
+                colAlpha = 0.8,
+                legendPosition = 'right',
+                legendLabSize = 12,
+                legendIconSize = 4.0, 
+                ylab = "-Log10(padj)",
+  legendLabels = c("NS", "Log2 FC", "padj", "padj and log2 FC"))
+dev.off()
+```
+
+
+# Saving upregulated and downregulated genes for functional enrichment analysis 
+```{r}
+top_genes_logfc_1 <- subset(res_cmp_ery, padj < 0.05 & abs(log2FoldChange) >= 1)
+
+up_genes <- subset(top_genes_logfc_1, log2FoldChange >= 1)
+down_genes <- subset(top_genes_logfc_1, log2FoldChange <= -1)
+
+up_ensembl_ids <- sub("\\..*", "", rownames(up_genes))
+down_ensembl_ids <- sub("\\..*", "", rownames(down_genes))
+
+write.table(up_ensembl_ids,
+            file = "up_genes_logfc1_cmp_vs_ery_deseq2_ensembl_ids.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+
+write.table(down_ensembl_ids,
+            file = "down_genes_logfc1_cmp_vs_ery_deseq2_ensembl_ids.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE)
+```
+
+##MA Plot
+```{r}
+plotMA(resLFC_cmp_ery, alpha = 0.05)
+title("MA Plot: CMP vs ERY")
+```
+
+
+
+## Clustering analysis
+### Transformation
+```{r}
+vsd_cmp_ery <- vst(dds_cmp_ery, blind=FALSE)
+```
+
+## Heatmap of count matrix
+```{r}
+library("pheatmap")
+select <- order(rowMeans(counts(dds_cmp_ery,normalized=TRUE)),
+                decreasing=TRUE)[1:50]
+df <- as.data.frame(colData(dds_cmp_ery)[, "cell_stage", drop = FALSE])
+pheatmap(assay(vsd_cmp_ery)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+         cluster_cols=FALSE, annotation_col=df,  main = "Top 50 Most Expressed Genes in CMP vs ERY")
+
+
+
+```
+### Sample clustering
+### Calculate sample-to-sample distances
+```{r}
+sampleDists_cmp_ery <- dist(t(assay(vsd_cmp_ery)))
+
+sampleDistMatrix_cmp_ery <- as.matrix(sampleDists_cmp_ery)
+rownames(sampleDistMatrix_cmp_ery) <- paste(vsd_cmp_ery$cell_stage, vsd_cmp_ery$type, sep="-")
+colnames(sampleDistMatrix_cmp_ery) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Greys")) )(255)
+pheatmap(sampleDistMatrix_cmp_ery,
+         clustering_distance_rows=sampleDists_cmp_ery,
+         clustering_distance_cols=sampleDists_cmp_ery,
+         col=colors,
+         main = "Sample-to-Sample Distance Matrix (CMP vs ERY)")
+```
+
+

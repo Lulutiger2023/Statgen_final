@@ -1,0 +1,134 @@
+---
+title: "Initial analysis and checking"
+output: html_document
+date: "2025-04-01"
+author: "Ishika Verma"
+---
+# Importing the required libraries
+```{r}
+library("DESeq2")
+library("apeglm")
+library("pheatmap")
+library("RColorBrewer")
+library("pheatmap")
+library("vsn")
+library(org.Mm.eg.db)
+library(ggplot2)
+library(EnhancedVolcano)
+library(ggVennDiagram)
+library(grid)
+library(devtools)
+library(enrichR)
+```
+
+
+## Reading the files for all the data
+
+```{r}
+#HSC files
+hsc_1 <- read.table("data/1_HSC/rna/ENCFF064MKY.tsv", header = TRUE, sep = "\t")
+hsc_2 <- read.table("data/1_HSC/rna/ENCFF247FEJ.tsv", header = TRUE, sep = "\t")
+
+#CMP files
+cmp_1 <- read.table("data/2_CMP/rna/ENCFF623OLU.tsv", header = TRUE, sep = "\t")
+cmp_2 <- read.table("data/2_CMP/rna/ENCFF691MHW.tsv", header = TRUE, sep = "\t")
+
+#CFUE files
+cfue_1 <- read.table("data/3_CFUE/rna/ENCFF655LMK.tsv", header = TRUE, sep = "\t") 
+cfue_2 <- read.table("data/3_CFUE/rna/ENCFF667IDY.tsv", header = TRUE, sep = "\t")  
+
+#ERY files
+ery_1 <- read.table("data/4_ERY/rna/ENCFF342WUL.tsv", header = TRUE, sep = "\t") 
+ery_2 <- read.table("data/4_ERY/rna/ENCFF858JHF.tsv", header = TRUE, sep = "\t") 
+
+```
+
+# Initial Analysis
+This analysis is done to check whether there are same number of genes in all the samples. 
+
+## Extract expected_count along with genes from all the samples
+```{r}
+#HSC files
+hsc_1_counts <- hsc_1$expected_count
+hsc_2_counts <- hsc_2$expected_count
+
+#CMP files
+cmp_1_counts <- cmp_1$expected_count
+cmp_2_counts <- cmp_2$expected_count
+
+#CFUE files
+cfue_1_counts <- cfue_1$expected_count
+cfue_2_counts <- cfue_2$expected_count  
+
+#ERY files
+ery_1_counts <- ery_1$expected_count
+ery_2_counts <- ery_2$expected_count
+```
+
+## Extract gene_id from all the samples
+```{r}
+#HSC files
+hsc_1_gene_id <- hsc_1$gene_id
+hsc_2_gene_id <- hsc_2$gene_id
+
+#CMP files
+cmp_1_gene_id <- cmp_1$gene_id
+cmp_2_gene_id <- cmp_2$gene_id
+
+#CFUE files
+cfue_1_gene_id <- cfue_1$gene_id
+cfue_2_gene_id <- cfue_2$gene_id
+
+#ERY files
+ery_1_gene_id <- ery_1$gene_id
+ery_2_gene_id <- ery_2$gene_id
+```
+
+## Ensuring that the length expectd_counts of the samples is the same
+```{r}
+#HSC files
+length(hsc_1$expected_count)
+length(hsc_2$expected_count)
+
+#CMP files
+length(cmp_1$expected_count)
+length(cmp_2$expected_count)
+
+#CFUE files
+length(cfue_1$expected_count)
+length(cfue_2$expected_count)
+
+#ERY files
+length(ery_1$expected_count)
+length(ery_2$expected_count)
+
+```
+
+#Ensuring that there are same number of genes in each sample
+```{r}
+#HSC files
+length(hsc_1$gene_id)
+length(hsc_2$gene_id)
+
+#CMP files
+length(cmp_1$gene_id)
+length(cmp_2$gene_id)
+
+#CFUE files
+length(cfue_1$gene_id)
+length(cfue_2$gene_id)
+
+#ERY files
+length(ery_1$gene_id)
+length(ery_2$gene_id)
+```
+
+
+
+
+
+
+
+
+
+
